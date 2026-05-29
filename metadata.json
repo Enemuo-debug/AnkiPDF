@@ -1,0 +1,6 @@
+{
+  "name": "PDF Flashcards Generator",
+  "description": "An intelligent study platform that extracts content from your PDFs and automatically generates spaced-repetition flashcards using Gemini AI.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
