@@ -5,15 +5,43 @@
 
 import { GoogleGenAI, Type } from "@google/genai";
 import { CardType } from "../types";
+import dotenv from "dotenv";
+import fs from "fs";
+import path from "path";
 
 let aiClient: GoogleGenAI | null = null;
 
 export function getGenAIClient(): GoogleGenAI {
   if (!aiClient) {
-    const key = process.env.GEMINI_API_KEY;
+    // Reload dotenv
+    dotenv.config();
+    let key = process.env.GEMINI_API_KEY;
+
+    // Resilient fallback: Try parsing .env or .env.example files manually
     if (!key || key === "MY_GEMINI_API_KEY") {
+      const filesToTry = [".env", ".env.example"];
+      for (const file of filesToTry) {
+        try {
+          const filePath = path.join(process.cwd(), file);
+          if (fs.existsSync(filePath)) {
+            const content = fs.readFileSync(filePath, "utf-8");
+            const match = content.match(/GEMINI_API_KEY=["']?([^"'\s]+)["']?/);
+            if (match && match[1] && match[1] !== "MY_GEMINI_API_KEY") {
+              key = match[1];
+              console.log(`[resilient-env] Found GEMINI_API_KEY in ${file} manually`);
+              break;
+            }
+          }
+        } catch (e) {
+          // ignore error
+        }
+      }
+    }
+
+    if (!key || key === "MY_GEMINI_API_KEY" || key === "") {
       throw new Error("GEMINI_API_KEY is not configured. Please add it to your environment secrets in the AI Studio sidebar.");
     }
+
     aiClient = new GoogleGenAI({
       apiKey: key,
       httpOptions: {
@@ -40,6 +68,47 @@ export interface GeneratedCard {
   sourcePage?: number;
 }
 
+export function cleanJsonString(str: string): string {
+  let cleaned = str.trim();
+  // Strip markdown code fences if present (e.g., ```json ... ```)
+  if (cleaned.startsWith("```")) {
+    cleaned = cleaned.replace(/^```[a-zA-Z]*\s*\n/, "");
+    cleaned = cleaned.replace(/\s*\n```$/, "");
+    cleaned = cleaned.trim();
+  }
+  
+  // Resilient JSON block extraction fallback
+  try {
+    JSON.parse(cleaned);
+    return cleaned;
+  } catch (e) {
+    const firstBrace = cleaned.indexOf("{");
+    const firstBracket = cleaned.indexOf("[");
+    
+    let startIndex = -1;
+    let endIndex = -1;
+    
+    if (firstBracket !== -1 && (firstBrace === -1 || firstBracket < firstBrace)) {
+      startIndex = firstBracket;
+      endIndex = cleaned.lastIndexOf("]");
+    } else if (firstBrace !== -1) {
+      startIndex = firstBrace;
+      endIndex = cleaned.lastIndexOf("}");
+    }
+    
+    if (startIndex !== -1 && endIndex !== -1 && endIndex > startIndex) {
+      const extracted = cleaned.substring(startIndex, endIndex + 1);
+      try {
+        JSON.parse(extracted);
+        return extracted;
+      } catch (innerError) {
+        // Fallback to original
+      }
+    }
+  }
+  return cleaned;
+}
+
 /**
  * Analyzes the uploaded PDF metadata to create a matching Deck title, description and subject group.
  */
@@ -47,19 +116,25 @@ export async function analyzePDFMetadata(base64Pdf: string): Promise<GeneratedMe
   const ai = getGenAIClient();
   
   // Clean potential base64 prefix
-  const cleanBase64 = base64Pdf.replace(/^data:application\/pdf;base64,/, "");
+  const cleanBase64 = base64Pdf.includes(";base64,")
+    ? base64Pdf.split(";base64,")[1]
+    : base64Pdf;
 
   const response = await ai.models.generateContent({
     model: "gemini-3.5-flash",
-    contents: [
-      {
-        inlineData: {
-          data: cleanBase64,
-          mimeType: "application/pdf"
+    contents: {
+      parts: [
+        {
+          inlineData: {
+            data: cleanBase64,
+            mimeType: "application/pdf"
+          }
+        },
+        {
+          text: "Analyze this PDF document and summarize its identity. Recommend a concise study deck name (max 5 words), a clear explanation description (max 20 words), a general school subject category (e.g. History, Medicine, Physics, Biology, Law, Engineering, Languages), and tell me the total pages you found."
         }
-      },
-      "Analyze this PDF document and summarize its identity. Recommend a concise study deck name (max 5 words), a clear explanation description (max 20 words), a general school subject category (e.g. History, Medicine, Physics, Biology, Law, Engineering, Languages), and tell me the total pages you found."
-    ],
+      ]
+    },
     config: {
       responseMimeType: "application/json",
       responseSchema: {
@@ -79,7 +154,8 @@ export async function analyzePDFMetadata(base64Pdf: string): Promise<GeneratedMe
     throw new Error("Gemini returned empty metadata mapping.");
   }
 
-  const parsed = JSON.parse(response.text.trim()) as GeneratedMeta;
+  const cleanedText = cleanJsonString(response.text);
+  const parsed = JSON.parse(cleanedText) as GeneratedMeta;
   return {
     deckName: parsed.deckName || "Smart PDF Deck",
     description: parsed.description || "Generated study deck",
@@ -93,18 +169,22 @@ export async function analyzePDFMetadata(base64Pdf: string): Promise<GeneratedMe
  */
 export async function generateFlashcardsFromPDF(base64Pdf: string, meta: GeneratedMeta): Promise<GeneratedCard[]> {
   const ai = getGenAIClient();
-  const cleanBase64 = base64Pdf.replace(/^data:application\/pdf;base64,/, "");
+  const cleanBase64 = base64Pdf.includes(";base64,")
+    ? base64Pdf.split(";base64,")[1]
+    : base64Pdf;
 
   const response = await ai.models.generateContent({
     model: "gemini-3.5-flash",
-    contents: [
-      {
-        inlineData: {
-          data: cleanBase64,
-          mimeType: "application/pdf"
-        }
-      },
-      `You are an elite professor and educational cognitive specialist. Extract a comprehensive, high-quality deck of active recall flashcards from this PDF document to help students understand and review topics.
+    contents: {
+      parts: [
+        {
+          inlineData: {
+            data: cleanBase64,
+            mimeType: "application/pdf"
+          }
+        },
+        {
+          text: `You are an elite professor and educational cognitive specialist. Extract a comprehensive, high-quality deck of active recall flashcards from this PDF document to help students understand and review topics.
       
       Generate between 12 to 20 outstanding cards total, ensuring coverage of:
       - Core vocabulary, key terms, definitions (type: "definition")
@@ -116,7 +196,9 @@ export async function generateFlashcardsFromPDF(base64Pdf: string, meta: Generat
       2. For CLOZE 'cloze' card: Front has double brackets wrapping the term to hide, e.g. "Water boils at {{c1::100 degrees Celsius}} under standard pressure.", Back is a short context notes or trivia about the term.
       3. For DEFINITION 'definition' card: Front is ONLY the term name (e.g., "Mitochondria"), Back is the strict academic definition.
       4. Try to estimate the true page index of where the concept appears and list it as sourcePage.`
-    ],
+        }
+      ]
+    },
     config: {
       responseMimeType: "application/json",
       responseSchema: {
@@ -140,7 +222,8 @@ export async function generateFlashcardsFromPDF(base64Pdf: string, meta: Generat
     throw new Error("Gemini returned empty flashcard array.");
   }
 
-  const cards = JSON.parse(response.text.trim()) as GeneratedCard[];
+  const cleanedText = cleanJsonString(response.text);
+  const cards = JSON.parse(cleanedText) as GeneratedCard[];
   
   // Quality Filtering Pass:
   // 1. Remove duplicate fronts

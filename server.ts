@@ -5,6 +5,7 @@
 
 import express from "express";
 import path from "path";
+import fs from "fs";
 import crypto from "crypto";
 import dotenv from "dotenv";
 import { createServer as createViteServer } from "vite";
@@ -14,6 +15,16 @@ import { analyzePDFMetadata, generateFlashcardsFromPDF } from "./src/server/ai";
 import { Card, Deck, GenerationJob, User } from "./src/types";
 
 // Load environment variables
+const envPath = path.join(process.cwd(), ".env");
+const envExamplePath = path.join(process.cwd(), ".env.example");
+if (!fs.existsSync(envPath) && fs.existsSync(envExamplePath)) {
+  try {
+    fs.copyFileSync(envExamplePath, envPath);
+    console.log("[dotenv] Created .env file successfully from .env.example template");
+  } catch (err) {
+    console.error("[dotenv] Failed to copy .env.example to .env:", err);
+  }
+}
 dotenv.config();
 
 const app = express();
