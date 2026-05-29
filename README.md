@@ -2,7 +2,9 @@
 
 An intelligent study platform that extracts content from your uploaded PDFs and automatically generates high-impact spaced-repetition flashcards using Gemini AI. 
 
-🔗 **Access the Application:** [AI Studio App Applet](https://ai.studio/apps/b21726f5-9c7c-440d-b20c-45568a67d3cd)
+🔗 **Access the Application:**
+- **AI Studio App Builder Interface:** [AI Studio Applet](https://ai.studio/apps/b21726f5-9c7c-440d-b20c-45568a67d3cd)
+- **Production Live Build:** [PDF Flashcards Generator](https://pdf-flashcards-generator-807593615515.europe-west3.run.app)
 
 ---
 
